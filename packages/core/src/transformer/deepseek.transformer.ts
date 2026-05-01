@@ -6,8 +6,55 @@ export class DeepseekTransformer implements Transformer {
 
   async transformRequestIn(request: UnifiedChatRequest): Promise<UnifiedChatRequest> {
     if (request.max_tokens && request.max_tokens > 8192) {
-      request.max_tokens = 8192; // DeepSeek has a max token limit of 8192
+      request.max_tokens = 8192;
     }
+
+    // Strip Anthropic reasoning param - DeepSeek v4-pro uses its own thinking mode
+    delete (request as any).reasoning;
+
+    // DeepSeek v4-pro thinking mode requires reasoning_content on every assistant
+    // message in multi-turn conversations. Claude Code doesn't echo it back, so
+    // we must convert thinking blocks/properties back to reasoning_content.
+    if (Array.isArray(request.messages)) {
+      for (const msg of request.messages) {
+        if (msg.role !== "assistant") continue;
+
+        // Convert top-level thinking property to reasoning_content
+        if ((msg as any).thinking) {
+          const t = (msg as any).thinking;
+          (msg as any).reasoning_content =
+            typeof t === "object" ? t.content || "" : String(t);
+          delete (msg as any).thinking;
+        }
+        // Convert thinking content blocks in array content to reasoning_content
+        else if (Array.isArray(msg.content)) {
+          let reasoningContent = "";
+          const filtered = msg.content.filter((block: any) => {
+            if (block.type === "thinking") {
+              reasoningContent += block.content || block.thinking || "";
+              return false;
+            }
+            return true;
+          });
+          (msg as any).reasoning_content = reasoningContent || "";
+          if (filtered.length === 0) {
+            msg.content = "";
+          } else if (
+            filtered.length === 1 &&
+            filtered[0].type === "text"
+          ) {
+            msg.content = (filtered[0] as any).text || "";
+          } else {
+            msg.content = filtered;
+          }
+        }
+        // No thinking content found - add empty reasoning_content
+        else if (!(msg as any).reasoning_content) {
+          (msg as any).reasoning_content = "";
+        }
+      }
+    }
+
     return request;
   }
 
