@@ -12,11 +12,34 @@ export class DeepseekTransformer implements Transformer {
     // Strip Anthropic reasoning param - DeepSeek v4-pro uses its own thinking mode
     delete (request as any).reasoning;
 
-    // DeepSeek v4-pro thinking mode requires reasoning_content on every assistant
-    // message in multi-turn conversations. Claude Code doesn't echo it back, so
-    // we must convert thinking blocks/properties back to reasoning_content.
     if (Array.isArray(request.messages)) {
       for (const msg of request.messages) {
+        // Strip unsupported content types (image_url, image, tool_use, tool_result)
+        // from user/tool messages - DeepSeek only accepts text content
+        if (msg.role !== "assistant" && Array.isArray(msg.content)) {
+          const filtered = msg.content.filter((block: any) => {
+            if (
+              block.type === "image_url" ||
+              block.type === "image" ||
+              block.type === "tool_use" ||
+              block.type === "tool_result"
+            ) {
+              return false;
+            }
+            return true;
+          });
+          if (filtered.length === 0) {
+            msg.content = "";
+          } else if (
+            filtered.length === 1 &&
+            filtered[0].type === "text"
+          ) {
+            msg.content = (filtered[0] as any).text || "";
+          } else {
+            msg.content = filtered;
+          }
+        }
+
         if (msg.role !== "assistant") continue;
 
         // Convert top-level thinking property to reasoning_content
